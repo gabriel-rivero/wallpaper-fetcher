@@ -14,6 +14,9 @@ public sealed class AppConfig
     public string? WallhavenApiKey { get; set; }
     public bool AutoAccentColor { get; set; } = true;
     public string? PlayniteBackgroundPath { get; set; }
+    public bool MatchWallpaperToTheme { get; set; } = true;
+    public int DarkModeMaxBrightness { get; set; } = 95;
+    public int LightModeMinBrightness { get; set; } = 150;
 
     private static string ConfigDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WallpaperFetcher");

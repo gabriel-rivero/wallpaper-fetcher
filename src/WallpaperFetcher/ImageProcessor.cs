@@ -2,11 +2,48 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 
 namespace WallpaperFetcher;
 
 public static class ImageProcessor
 {
+    // Perceived-luminance average (0=black..255=white), used to check a candidate wallpaper's
+    // thumbnail actually looks dark/light before spending bandwidth on the full-res download.
+    public static double ComputeAverageBrightness(byte[] imageBytes)
+    {
+        using var ms = new MemoryStream(imageBytes);
+        using var loaded = new Bitmap(ms);
+        using var bmp = loaded.Clone(new Rectangle(0, 0, loaded.Width, loaded.Height), PixelFormat.Format24bppRgb);
+
+        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+        try
+        {
+            var buffer = new byte[data.Stride * bmp.Height];
+            Marshal.Copy(data.Scan0, buffer, 0, buffer.Length);
+
+            long sum = 0;
+            long count = 0;
+            for (var y = 0; y < bmp.Height; y++)
+            {
+                var rowStart = y * data.Stride;
+                for (var x = 0; x < bmp.Width; x++)
+                {
+                    var idx = rowStart + x * 3;
+                    byte b = buffer[idx], g = buffer[idx + 1], r = buffer[idx + 2];
+                    sum += (long)(0.299 * r + 0.587 * g + 0.114 * b);
+                    count++;
+                }
+            }
+            return count == 0 ? 128.0 : (double)sum / count;
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+        }
+    }
+
     public static void CropResizeToFill(string sourcePath, string destPath, int targetWidth, int targetHeight)
     {
         using var src = Image.FromFile(sourcePath);

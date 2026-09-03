@@ -104,10 +104,16 @@ public static class Program
         if (category == WallpaperCategory.Random)
             category = Random.Shared.Next(2) == 0 ? WallpaperCategory.Anime : WallpaperCategory.Games;
 
+        ThemeMode? themeMode = config.MatchWallpaperToTheme ? ThemeDetector.GetCurrentMode() : null;
+        if (themeMode is not null)
+            Logger.Log($"Windows theme is {themeMode}; biasing wallpaper search toward a matching image.");
+
         return await RetryPolicy.RunWithBackoffAsync(
             async () =>
             {
-                var result = await wallhaven.GetRandomWallpaperAsync(category, width, height, CancellationToken.None)
+                var result = await wallhaven.GetRandomWallpaperAsync(
+                        category, width, height, themeMode,
+                        config.DarkModeMaxBrightness, config.LightModeMinBrightness, CancellationToken.None)
                     ?? throw new HttpRequestException("No results returned from Wallhaven for this query.");
 
                 var rawPath = Path.Combine(AppConfig.CacheDir, $"raw_{monitorIndex}{Path.GetExtension(result.ImageUrl)}");

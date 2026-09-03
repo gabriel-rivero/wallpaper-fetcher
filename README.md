@@ -35,7 +35,10 @@ the target machine.
   "BaseDelaySeconds": 5,          // exponential backoff base (5s, 10s, 20s, 40s, ...)
   "WallhavenApiKey": null,        // optional; raises Wallhaven's anonymous rate limit
   "AutoAccentColor": true,        // toggle Windows' "pick accent color from background"
-  "PlayniteBackgroundPath": null  // optional, see Playnite section below
+  "PlayniteBackgroundPath": null, // optional, see Playnite section below
+  "MatchWallpaperToTheme": true,  // bias fetches to match current Windows light/dark mode
+  "DarkModeMaxBrightness": 95,    // 0-255 average luminance; at/below this counts as "dark"
+  "LightModeMinBrightness": 150   // 0-255 average luminance; at/above this counts as "light"
 }
 ```
 
@@ -52,6 +55,11 @@ launched at logon, so this file is the only record of what happened).
   a wallpaper per monitor ID, each fetched/cropped to that monitor's exact native resolution. Set
   `PerMonitorWallpaper: false` to instead fetch one image sized to the first monitor and apply it to
   all displays.
+- **Light/dark theme matching**: reads Windows' own theme setting
+  (`HKCU\...\Themes\Personalize\SystemUsesLightTheme`) and, when enabled, biases the Wallhaven query
+  toward matching dominant colors and checks up to 6 candidates' thumbnails for actual average
+  brightness before downloading the full-res image, picking the first one within the configured
+  threshold (or the closest one seen, if none qualify — it never fails a run over this).
 - **Accent color**: Windows has a built-in "Automatically pick an accent color from my background"
   setting (Settings > Personalization > Colors). We just flip that registry switch on
   (`HKCU\...\Themes\Personalize\AutoColorization`) — Windows recomputes the accent color itself every

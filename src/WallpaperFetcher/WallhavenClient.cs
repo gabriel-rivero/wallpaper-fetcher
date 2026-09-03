@@ -20,6 +20,14 @@ public sealed class WallhavenClient
         "starfield", "hollow knight", "hades", "metal gear solid", "resident evil",
     };
 
+    // Wallhaven's dominant-color search only accepts colors from its fixed swatch list.
+    private const string DarkSwatch = "000000";
+    private const string LightSwatch = "ffffff";
+
+    // How many search-result candidates to thumbnail-check for a brightness match before
+    // settling for the closest one we've seen. Keeps worst-case extra requests bounded.
+    private const int MaxBrightnessCandidates = 6;
+
     private readonly HttpClient _http;
     private readonly string? _apiKey;
 
@@ -30,7 +38,8 @@ public sealed class WallhavenClient
     }
 
     public async Task<WallhavenResult?> GetRandomWallpaperAsync(
-        WallpaperCategory category, int minWidth, int minHeight, CancellationToken ct)
+        WallpaperCategory category, int minWidth, int minHeight, ThemeMode? preferredMode,
+        int darkModeMaxBrightness, int lightModeMinBrightness, CancellationToken ct)
     {
         var query = new List<string>
         {
@@ -51,6 +60,9 @@ public sealed class WallhavenClient
                 break;
         }
 
+        if (preferredMode is not null)
+            query.Add($"colors={(preferredMode == ThemeMode.Dark ? DarkSwatch : LightSwatch)}");
+
         if (!string.IsNullOrWhiteSpace(_apiKey))
             query.Add($"apikey={_apiKey}");
 
@@ -65,9 +77,62 @@ public sealed class WallhavenClient
         if (candidates is null || candidates.Count == 0)
             return null;
 
-        var pick = candidates[Random.Shared.Next(candidates.Count)];
-        return new WallhavenResult(pick.Id, pick.Path, pick.DimensionX, pick.DimensionY);
+        if (preferredMode is null)
+        {
+            var pick = candidates[Random.Shared.Next(candidates.Count)];
+            return ToResult(pick);
+        }
+
+        return await PickByBrightnessAsync(candidates, preferredMode.Value, darkModeMaxBrightness, lightModeMinBrightness, ct);
     }
+
+    private async Task<WallhavenResult> PickByBrightnessAsync(
+        List<WallhavenItem> candidates, ThemeMode preferredMode,
+        int darkModeMaxBrightness, int lightModeMinBrightness, CancellationToken ct)
+    {
+        var shuffled = candidates.OrderBy(_ => Random.Shared.Next()).Take(MaxBrightnessCandidates).ToList();
+
+        WallhavenItem? closest = null;
+        var closestDistance = double.MaxValue;
+
+        foreach (var candidate in shuffled)
+        {
+            double brightness;
+            try
+            {
+                var thumbBytes = await _http.GetByteArrayAsync(candidate.Thumbs.Small, ct);
+                brightness = ImageProcessor.ComputeAverageBrightness(thumbBytes);
+            }
+            catch
+            {
+                continue; // bad thumbnail: skip, don't let one flaky download sink the whole run
+            }
+
+            var isMatch = preferredMode == ThemeMode.Dark
+                ? brightness <= darkModeMaxBrightness
+                : brightness >= lightModeMinBrightness;
+            if (isMatch)
+            {
+                Logger.Log($"Theme match: picked brightness={brightness:0} for {preferredMode} mode.");
+                return ToResult(candidate);
+            }
+
+            var target = preferredMode == ThemeMode.Dark ? 0 : 255;
+            var distance = Math.Abs(brightness - target);
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closest = candidate;
+            }
+        }
+
+        var fallback = closest ?? candidates[Random.Shared.Next(candidates.Count)];
+        Logger.Log($"No exact brightness match for {preferredMode} mode; using closest candidate (distance={closestDistance:0}).");
+        return ToResult(fallback);
+    }
+
+    private static WallhavenResult ToResult(WallhavenItem item) =>
+        new(item.Id, item.Path, item.DimensionX, item.DimensionY);
 
     private sealed class WallhavenSearchResponse
     {
@@ -84,5 +149,12 @@ public sealed class WallhavenClient
 
         [JsonPropertyName("dimension_y")]
         public int DimensionY { get; set; }
+
+        public WallhavenThumbs Thumbs { get; set; } = new();
+    }
+
+    private sealed class WallhavenThumbs
+    {
+        public string Small { get; set; } = "";
     }
 }
