@@ -1,4 +1,4 @@
-// Exponential backoff for transient failures (no internet, Wallhaven unreachable). Gives up after maxAttempts.
+// Exponential backoff for transient failures (no internet, provider/API unreachable). Gives up after maxAttempts.
 namespace WallpaperFetcher;
 
 public sealed class RetryExhaustedException : Exception

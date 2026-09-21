@@ -1,8 +1,8 @@
 # WallpaperFetcher
 
-Fetches a random anime/video-game wallpaper from [Wallhaven](https://wallhaven.cc), crops/resizes it
-to exactly match each connected display's resolution, and sets it as the desktop wallpaper. Runs once
-at logon.
+Fetches a random anime/video-game wallpaper from one of several wallpaper services (Wallhaven, with
+Konachan / Yande.re / Picsum fallbacks), crops/resizes it to exactly match each connected display's
+resolution, and sets it as the desktop wallpaper. Runs once at logon.
 
 ## Build & publish
 
@@ -34,6 +34,9 @@ the target machine.
   "MaxRetries": 5,                // attempts before giving up on a no-internet/API-down run
   "BaseDelaySeconds": 5,          // exponential backoff base (5s, 10s, 20s, 40s, ...)
   "WallhavenApiKey": null,        // optional; raises Wallhaven's anonymous rate limit
+  "ProviderOrder": ["wallhaven", "konachan", "yandere", "picsum"],
+                                  // wallpaper backends, tried in order until one succeeds
+  "HedgeProviders": false,        // true = query all providers at once, first to answer wins
   "AutoAccentColor": true,        // toggle Windows' "pick accent color from background"
   "PlayniteBackgroundPath": null, // optional, see Playnite section below
   "MatchWallpaperToTheme": true,  // bias fetches to match current Windows light/dark mode
@@ -47,10 +50,20 @@ launched at logon, so this file is the only record of what happened).
 
 ## How it works
 
-- **Wallpaper source**: Wallhaven's public search API, keyless by default (45 req/min anonymous
-  limit, plenty for this use case). `"anime"` uses Wallhaven's dedicated anime category; `"games"`
-  has no dedicated category on Wallhaven, so it searches the general category against a rotating
-  list of well-known game titles/franchises. SFW purity only.
+- **Wallpaper source**: a chain of providers, tried in `ProviderOrder` until one returns a usable
+  image — so a single service being down no longer breaks a run:
+  - `wallhaven` — [Wallhaven](https://wallhaven.cc)'s public search API, keyless by default (45
+    req/min anonymous limit). `"anime"` uses its dedicated anime category; `"games"` has no dedicated
+    category, so it searches the general category against a rotating list of game franchises.
+  - `konachan` / `yandere` — the Moebooru boorus (keyless `post.json`, `rating:safe`, `order:random`),
+    the anime/game fallbacks you want behind Wallhaven.
+  - `picsum` — [Lorem Picsum](https://picsum.photos), keyless generic photos. Not anime/game art, but
+    always up, so the run still changes the wallpaper when every niche service is down.
+
+  By default the chain is a strict fallback (`HedgeProviders: false`); set it to `true` to fire all
+  providers at once and take the first to answer (each provider starts 400 ms after the previous one,
+  so a higher-priority provider still wins when it's healthy). All providers are SFW-only. If *every*
+  provider fails, the whole chain is retried with the backoff below.
 - **Multi-monitor**: uses the shell's `IDesktopWallpaper` COM interface to enumerate monitors and set
   a wallpaper per monitor ID, each fetched/cropped to that monitor's exact native resolution. Set
   `PerMonitorWallpaper: false` to instead fetch one image sized to the first monitor and apply it to
@@ -59,7 +72,8 @@ launched at logon, so this file is the only record of what happened).
   (`HKCU\...\Themes\Personalize\SystemUsesLightTheme`) and, when enabled, biases the Wallhaven query
   toward matching dominant colors and checks up to 6 candidates' thumbnails for actual average
   brightness before downloading the full-res image, picking the first one within the configured
-  threshold (or the closest one seen, if none qualify — it never fails a run over this).
+  threshold (or the closest one seen, if none qualify — it never fails a run over this). Providers
+  without a color query (Konachan/Yande.re/Picsum) are matched by thumbnail brightness only.
 - **Accent color**: Windows has a built-in "Automatically pick an accent color from my background"
   setting (Settings > Personalization > Colors). We just flip that registry switch on
   (`HKCU\...\Themes\Personalize\AutoColorization`) — Windows recomputes the accent color itself every

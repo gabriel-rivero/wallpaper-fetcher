@@ -1,6 +1,9 @@
-// Entry point: --install/--uninstall manage the logon scheduled task; default/--run does one
-// fetch-and-set pass (per-monitor wallpapers, accent color, optional Playnite background copy).
+// Entry point: --install/--uninstall manage the logon startup entry; default/--run does one
+// fetch-and-set pass (per-monitor wallpapers, accent color, optional Playnite background copy),
+// acquiring the image from the first of several wallpaper providers that answers.
 // [STAThread] is required: IDesktopWallpaper.GetMonitorRECT fails with E_FAIL from an MTA thread.
+using WallpaperFetcher.Providers;
+
 namespace WallpaperFetcher;
 
 public static class Program
@@ -33,8 +36,11 @@ public static class Program
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("WallpaperFetcher/1.0");
 
-        var wallhaven = new WallhavenClient(http, config.WallhavenApiKey);
+        var providerChain = new WallpaperProviderChain(http, config);
         var wallpaperService = new WallpaperService();
+
+        Logger.Log($"Wallpaper providers (in order): {string.Join(", ", providerChain.ProviderNames)}" +
+            (config.HedgeProviders ? " [hedged]" : ""));
 
         try
         {
@@ -55,7 +61,7 @@ public static class Program
                 primaryImagePath = null;
                 foreach (var monitor in monitors)
                 {
-                    var imagePath = await FetchAndPrepareAsync(monitor.Width, monitor.Height, monitor.Index, config, wallhaven, http);
+                    var imagePath = await FetchAndPrepareAsync(monitor.Width, monitor.Height, monitor.Index, config, providerChain, http);
                     wallpaperService.SetWallpaper(monitor.DeviceId, imagePath);
                     Logger.Log($"Set wallpaper for monitor {monitor.Index} ({monitor.Width}x{monitor.Height}).");
                     primaryImagePath ??= imagePath;
@@ -64,7 +70,7 @@ public static class Program
             else
             {
                 var primary = monitors[0];
-                var imagePath = await FetchAndPrepareAsync(primary.Width, primary.Height, 0, config, wallhaven, http);
+                var imagePath = await FetchAndPrepareAsync(primary.Width, primary.Height, 0, config, providerChain, http);
                 wallpaperService.SetWallpaperForAll(imagePath);
                 Logger.Log($"Set wallpaper for all {monitors.Count} monitor(s) using a {primary.Width}x{primary.Height} image.");
                 primaryImagePath = imagePath;
@@ -81,7 +87,7 @@ public static class Program
         }
         catch (RetryExhaustedException ex)
         {
-            Logger.Log($"Giving up: no usable connection to Wallhaven after retries ({ex.InnerException?.Message}).");
+            Logger.Log($"Giving up: no wallpaper provider succeeded after retries ({ex.InnerException?.Message}).");
             return 2;
         }
         catch (Exception ex)
@@ -98,7 +104,7 @@ public static class Program
     }
 
     private static async Task<string> FetchAndPrepareAsync(
-        int width, int height, int monitorIndex, AppConfig config, WallhavenClient wallhaven, HttpClient http)
+        int width, int height, int monitorIndex, AppConfig config, WallpaperProviderChain chain, HttpClient http)
     {
         var category = config.ResolveCategory();
         if (category == WallpaperCategory.Random)
@@ -108,29 +114,26 @@ public static class Program
         if (themeMode is not null)
             Logger.Log($"Windows theme is {themeMode}; biasing wallpaper search toward a matching image.");
 
-        return await RetryPolicy.RunWithBackoffAsync(
-            async () =>
-            {
-                var result = await wallhaven.GetRandomWallpaperAsync(
-                        category, width, height, themeMode,
-                        config.DarkModeMaxBrightness, config.LightModeMinBrightness, CancellationToken.None)
-                    ?? throw new HttpRequestException("No results returned from Wallhaven for this query.");
+        var query = new WallpaperQuery(category, width, height, themeMode);
+        var candidate = await chain.GetWallpaperAsync(
+            query, config.DarkModeMaxBrightness, config.LightModeMinBrightness, http,
+            config.MaxRetries, TimeSpan.FromSeconds(config.BaseDelaySeconds), CancellationToken.None);
 
-                var rawPath = Path.Combine(AppConfig.CacheDir, $"raw_{monitorIndex}{Path.GetExtension(result.ImageUrl)}");
-                var bytes = await http.GetByteArrayAsync(result.ImageUrl);
-                await File.WriteAllBytesAsync(rawPath, bytes);
-
-                var finalPath = Path.Combine(AppConfig.CacheDir, $"monitor_{monitorIndex}.jpg");
-                ImageProcessor.CropResizeToFill(rawPath, finalPath, width, height);
-                File.Delete(rawPath);
-
-                Logger.Log($"Fetched {category} wallpaper (id={result.Id}) for monitor {monitorIndex}.");
-                return finalPath;
-            },
+        var rawPath = Path.Combine(AppConfig.CacheDir, $"raw_{monitorIndex}{Path.GetExtension(candidate.ImageUrl)}");
+        var bytes = await RetryPolicy.RunWithBackoffAsync(
+            () => http.GetByteArrayAsync(candidate.ImageUrl),
             maxAttempts: config.MaxRetries,
             baseDelay: TimeSpan.FromSeconds(config.BaseDelaySeconds),
             onRetry: (attempt, ex, delay) => Logger.Log(
-                $"Attempt {attempt}/{config.MaxRetries} failed ({ex.GetType().Name}: {ex.Message}). Retrying in {delay.TotalSeconds:0}s..."),
+                $"Image download attempt {attempt}/{config.MaxRetries} failed ({ex.GetType().Name}: {ex.Message}). Retrying in {delay.TotalSeconds:0}s..."),
             ct: CancellationToken.None);
+        await File.WriteAllBytesAsync(rawPath, bytes);
+
+        var finalPath = Path.Combine(AppConfig.CacheDir, $"monitor_{monitorIndex}.jpg");
+        ImageProcessor.CropResizeToFill(rawPath, finalPath, width, height);
+        File.Delete(rawPath);
+
+        Logger.Log($"Fetched {category} wallpaper (id={candidate.Id}, source={candidate.ProviderName}) for monitor {monitorIndex}.");
+        return finalPath;
     }
 }

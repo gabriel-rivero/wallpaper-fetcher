@@ -12,6 +12,14 @@ public sealed class AppConfig
     public int MaxRetries { get; set; } = 5;
     public double BaseDelaySeconds { get; set; } = 5;
     public string? WallhavenApiKey { get; set; }
+
+    // Wallpaper backends, tried in order until one succeeds. "wallhaven" | "konachan" | "yandere" | "picsum".
+    public List<string> ProviderOrder { get; set; } = new() { "wallhaven", "konachan", "yandere", "picsum" };
+
+    // true = query all providers at once and take the first that answers (lower latency, more load);
+    // false = strict fallback chain (only hits the next provider if the previous one fails).
+    public bool HedgeProviders { get; set; } = false;
+
     public bool AutoAccentColor { get; set; } = true;
     public string? PlayniteBackgroundPath { get; set; }
     public bool MatchWallpaperToTheme { get; set; } = true;
